@@ -89,6 +89,32 @@ function syncAccessoryStatus(PDO $pdo, int $promiseId, ?int $projectId, string $
     }
 }
 
+// Refuse un parking / cellier ajouté à la promesse s'il est déjà pris :
+// dans la promesse en cours d'un autre appartement, vendu avec un autre appartement,
+// ou déjà Réservé / Vendu / Loué. Les places déjà dans cette promesse ne sont pas contrôlées.
+function assertAccessoriesFree(PDO $pdo, int $promiseId, ?int $projectId, string $unitCode, array $newCodes, array $oldCodes, string $promiseStatus): void {
+    if (!$projectId || !in_array($promiseStatus, ['draft', 'signed', 'converted_to_sale'], true)) return;
+    $old = array_map('strtoupper', $oldCodes);
+    $st = $pdo->prepare("SELECT status_code FROM unit_accessoires WHERE project_id = ? AND UPPER(code) = UPPER(?) LIMIT 1");
+    foreach ($newCodes as $code) {
+        if (in_array(strtoupper($code), $old, true)) continue;
+        $other = findActivePromiseForAccessory($pdo, $projectId, $code, $promiseId);
+        if ($other) {
+            throw new RuntimeException("Le parking / cellier $code est déjà dans la promesse "
+                . ($other['promise_number'] ?: '#' . $other['id']) . " (appartement " . $other['unit_code'] . "). Choisissez une autre place.");
+        }
+        if (accessorySoldWithOtherUnit($pdo, $projectId, $code, $unitCode)) {
+            throw new RuntimeException("Le parking / cellier $code est déjà vendu avec un autre appartement. Choisissez une autre place.");
+        }
+        $st->execute([$projectId, $code]);
+        $s = strtoupper((string)$st->fetchColumn());
+        if (in_array($s, ['R', 'V', 'L'], true)) {
+            $label = $s === 'V' ? 'vendu' : ($s === 'L' ? 'loué' : 'réservé');
+            throw new RuntimeException("Le parking / cellier $code est déjà $label. Choisissez une place disponible.");
+        }
+    }
+}
+
 // Promesse convertie en vente : l'appartement passe en Vendu (V)
 function markUnitSold(PDO $pdo, string $unitCode, ?int $projectId): void {
     if (!$projectId) return;
@@ -185,6 +211,12 @@ try {
             assertNoOtherActivePromise($pdo, $promise_id, $unit_code, $fields['project_id']);
         }
 
+        // Pas de parking / cellier déjà pris par un autre appartement
+        assertAccessoriesFree($pdo, $promise_id, $fields['project_id'], $unit_code,
+            array_merge(parseCodes($fields['parking_codes']), parseCodes($fields['cellier_codes'])),
+            array_merge(parseCodes($existing['parking_codes']), parseCodes($existing['cellier_codes'])),
+            (string)$fields['status']);
+
         // Auto-lock when converted to sale
         if ($fields['status'] === 'converted_to_sale') {
             $fields['is_locked'] = 1;
@@ -225,6 +257,9 @@ try {
         if (in_array($status, ['draft','signed','converted_to_sale'], true)) {
             assertNoOtherActivePromise($pdo, 0, $unit_code, $projectId);
         }
+        assertAccessoriesFree($pdo, 0, $projectId, $unit_code,
+            array_merge(parseCodes($data['parking_codes'] ?? ''), parseCodes($data['cellier_codes'] ?? '')),
+            [], (string)$status);
 
         $stmt = $pdo->prepare("
             INSERT INTO promises

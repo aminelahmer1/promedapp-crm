@@ -1,0 +1,10 @@
+config.php
+uploads/
+vendor/
+composer.phar
+.claude/
+_diag_parking.php
+*.zip
+*.sql.gz
+api/client_save.php
+create_first_user.php

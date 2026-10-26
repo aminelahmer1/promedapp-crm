@@ -25,6 +25,7 @@ define('FL_MONTHLY_RATE', 0.005);
 define('FL_VAT_RATE',     1.19);
 define('FL_BASE_YEAR',    2025);
 define('FL_BASE_MO',      9);        // septembre = 9 (MONTH() MySQL est 1-indexé)
+require_once __DIR__ . '/../includes/price_lib.php';
 
 /* ══ Vérifier le freeze ════════════════════════════════════ */
 try {
@@ -39,10 +40,9 @@ try {
 $now    = new DateTime();
 $curY   = (int)$now->format('Y');
 $curMo  = (int)$now->format('n');
-$months = ($curY - FL_BASE_YEAR) * 12 + ($curMo - FL_BASE_MO);
-if ($months < 0) $months = 0;
-
-$factor = pow(1 + FL_MONTHLY_RATE, $months);
+// +0,5 % du prix de septembre 2025 par mois, mois bloqués non comptés (comme la liste)
+$factor = flava_coef(flava_frozen_months($pdo), $curY, $curMo);
+$months = (int)round(($factor - 1) / FL_MONTHLY_RATE);
 
 /* ══ Prix du mois courant ════════════════════════════════════ */
 $s1M2Ht    = round(FL_S1_BASE   * $factor, 3);

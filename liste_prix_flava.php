@@ -1,5 +1,6 @@
 <?php
 require __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/price_lib.php';
 $username = htmlspecialchars($_SESSION['full_name'] ?? $_SESSION['username'] ?? '', ENT_QUOTES, 'UTF-8');
 $isAdmin  = (($_SESSION['role'] ?? '') === 'admin');
 
@@ -522,6 +523,7 @@ window.__FLAVA_PRICE_CFG__ = <?= json_encode([
     'frozen' => $flavaPriceFrozen,
     'year'   => $flavaFreezeYear,
     'month'  => $flavaFreezeMonth !== null ? $flavaFreezeMonth - 1 : null, // JS 0-indexed
+    'frozenIdx' => array_keys(flava_frozen_months($pdo)), // mois bloqués : année*12 + mois (1-12)
 ], JSON_UNESCAPED_UNICODE) ?>;
 </script>
 
@@ -579,6 +581,17 @@ function elapsed(y, mo) {
   return (y - BASE_YEAR) * 12 + (mo - BASE_MO);
 }
 
+/* Coefficient du mois : +0,5 % du prix de septembre 2025 par mois non bloqué
+   (les mois bloqués ne sont jamais rattrapés) — même calcul que includes/price_lib.php */
+const FROZEN_IDX = new Set(PRICE_CFG.frozenIdx || []);
+function coefAt(y, mo) {
+  const base = BASE_YEAR * 12 + BASE_MO + 1;   // index année*12 + mois (1-12)
+  const idx  = y * 12 + mo + 1;
+  let n = 0;
+  for (let i = base + 1; i <= idx; i++) if (!FROZEN_IDX.has(i)) n++;
+  return 1 + MONTHLY_RATE * n;
+}
+
 /* Base price per unit (September 2025) */
 function unitBase(u) {
   const desig = (u.designation || '').trim().toUpperCase();
@@ -595,15 +608,14 @@ function unitBase(u) {
 function unitM2Ht(u, y, mo) {
   const { base, fixed } = unitBase(u);
   if (fixed) return base;
-  const n = Math.max(0, elapsed(y, mo));
-  return Math.round(base * Math.pow(1 + MONTHLY_RATE, n) * 1000) / 1000;
+  return Math.round(base * coefAt(y, mo) * 1000) / 1000;
 }
 
 function parkingHT(y, mo) {
-  return Math.round(PARK_BASE * Math.pow(1 + MONTHLY_RATE, Math.max(0, elapsed(y, mo))) * 1000) / 1000;
+  return Math.round(PARK_BASE * coefAt(y, mo) * 1000) / 1000;
 }
 function cellierM2(y, mo) {
-  return Math.round(CELL_BASE * Math.pow(1 + MONTHLY_RATE, Math.max(0, elapsed(y, mo))) * 1000) / 1000;
+  return Math.round(CELL_BASE * coefAt(y, mo) * 1000) / 1000;
 }
 
 function r3(n) { return Math.round((n || 0) * 1000) / 1000; }

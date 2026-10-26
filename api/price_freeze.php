@@ -36,6 +36,23 @@ $nowFrozen = ($current === '1');
 
 if ($nowFrozen) {
     // Reprendre l'augmentation
+    // FLAVA : les mois bloqués (du mois du blocage au mois précédent) restent sans augmentation
+    if ($project === 'flava') {
+        $fy = (int)(getSetting($pdo, 'flava_price_freeze_year') ?? 0);
+        $fm = (int)(getSetting($pdo, 'flava_price_freeze_month') ?? 0);
+        $months = array_filter(explode(',', (string)getSetting($pdo, 'flava_price_frozen_months')));
+        if ($fy > 0 && $fm >= 1 && $fm <= 12) {
+            $now = new DateTime();
+            $nowIdx = (int)$now->format('Y') * 12 + (int)$now->format('n');
+            for ($i = $fy * 12 + $fm; $i < $nowIdx; $i++) {
+                $y = intdiv($i - 1, 12);
+                $months[] = sprintf('%04d-%02d', $y, $i - $y * 12);
+            }
+        }
+        $months = array_values(array_unique(array_map('trim', $months)));
+        sort($months);
+        setSetting($pdo, 'flava_price_frozen_months', implode(',', $months));
+    }
     setSetting($pdo, $frozenKey,                 '0');
     setSetting($pdo, $project . '_price_freeze_year',  null);
     setSetting($pdo, $project . '_price_freeze_month', null);

@@ -1,7 +1,8 @@
 <?php
 /* ══ Prix de vente du mois : même calcul que la Liste des prix ══════════
-   Mois de calcul = mois du blocage si « Bloquer l'augmentation » est actif,
+   AVA : mois de calcul = mois du blocage si « Bloquer l'augmentation » est actif,
    sinon le mois en cours (borné à la période de la liste).
+   FLAVA : +0,5 % du prix de septembre 2025 par mois non bloqué (voir flava_coef).
    Une unité vendue (V) garde le prix enregistré en base.
    Ce fichier ne modifie jamais la base. */
 
@@ -105,14 +106,45 @@ const FLAVA_PARK_BASE    = 30000;
 const FLAVA_CELL_BASE_M2 = 2730;
 const FLAVA_LAST_YEAR    = 2027;
 const FLAVA_LAST_MONTH   = 12;
+const FLAVA_FROZEN_MONTHS = ['2026-08', '2026-09'];   // mois bloqués par la direction
 
-/* Coefficient d'augmentation FLAVA du mois de calcul */
+/* Mois FLAVA bloqués, en index année*12+mois : liste ci-dessus, blocages terminés
+   (app_settings.flava_price_frozen_months) et blocage en cours (du mois bloqué à la fin de la liste) */
+function flava_frozen_months(PDO $pdo): array {
+    $codes = FLAVA_FROZEN_MONTHS;
+    $frozen = [];
+    try {
+        $st = $pdo->query("SELECT setting_key, setting_value FROM app_settings
+                           WHERE setting_key IN ('flava_price_frozen_months','flava_price_frozen','flava_price_freeze_year','flava_price_freeze_month')");
+        $s = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) $s[$row['setting_key']] = (string)$row['setting_value'];
+        $codes = array_merge($codes, explode(',', $s['flava_price_frozen_months'] ?? ''));
+        if (($s['flava_price_frozen'] ?? '0') === '1') {
+            $from = (int)($s['flava_price_freeze_year'] ?? date('Y')) * 12 + (int)($s['flava_price_freeze_month'] ?? date('n'));
+            for ($i = $from; $i <= FLAVA_LAST_YEAR * 12 + FLAVA_LAST_MONTH; $i++) $frozen[$i] = true;
+        }
+    } catch (Throwable $e) {}
+    foreach ($codes as $c) {
+        if (preg_match('/^(\d{4})-(\d{1,2})$/', trim($c), $m)) $frozen[(int)$m[1] * 12 + (int)$m[2]] = true;
+    }
+    return $frozen;
+}
+
+/* Coefficient FLAVA d'un mois : 1 + 0,5 % par mois écoulé depuis septembre 2025,
+   sans compter les mois bloqués (pas de rattrapage après un blocage) */
+function flava_coef(array $frozen, int $y, int $m): float {
+    $base = FLAVA_BASE_YEAR * 12 + FLAVA_BASE_MONTH;
+    $idx  = min(max($y * 12 + $m, $base), FLAVA_LAST_YEAR * 12 + FLAVA_LAST_MONTH);
+    $n = 0;
+    for ($i = $base + 1; $i <= $idx; $i++) {
+        if (empty($frozen[$i])) $n++;
+    }
+    return 1 + PRICE_MONTHLY_RATE * $n;
+}
+
+/* Coefficient d'augmentation FLAVA du mois en cours */
 function flava_month_prices(PDO $pdo): array {
-    [$y, $m] = price_calc_month($pdo, 'flava');
-    $idx  = $y * 12 + $m;
-    $idx  = max($idx, FLAVA_BASE_YEAR * 12 + FLAVA_BASE_MONTH);
-    $idx  = min($idx, FLAVA_LAST_YEAR * 12 + FLAVA_LAST_MONTH);
-    $coef = pow(1 + PRICE_MONTHLY_RATE, $idx - (FLAVA_BASE_YEAR * 12 + FLAVA_BASE_MONTH));
+    $coef = flava_coef(flava_frozen_months($pdo), (int)date('Y'), (int)date('n'));
     return [
         'coef'       => $coef,
         'parking_ht' => price_r3(FLAVA_PARK_BASE * $coef),

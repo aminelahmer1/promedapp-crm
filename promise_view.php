@@ -1,5 +1,6 @@
 <?php
 require __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/nav_lib.php';
 if (empty($_SESSION['user_id'])) { header('Location: login.php'); exit; }
 
 $promise_id = (int)($_GET['id'] ?? 0);
@@ -195,6 +196,7 @@ $PAY_LABEL = ['cash'=>'Espèces','cheque'=>'Chèque','bank_transfer'=>'Virement'
   <!-- Navigation -->
   <div class="form-section">
     <h2>Navigation</h2>
+    <a class="nav-link" href="<?= htmlspecialchars(nav_home_url(), ENT_QUOTES, 'UTF-8') ?>">⌂ Accueil du projet</a>
     <a class="nav-link" href="promises.php">← Promesses de vente</a>
     <a class="nav-link" href="clients.php">Dossiers clients</a>
   </div>

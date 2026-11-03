@@ -1,5 +1,6 @@
 <?php
 require __DIR__ . '/../config.php';
+require_once __DIR__ . '/../includes/locaux_lib.php';
 if (empty($_SESSION['user_id'])) { http_response_code(403); exit(json_encode(['error'=>'Non autorisé'])); }
 header('Content-Type: application/json');
 
@@ -25,11 +26,16 @@ if ((int)$chk->fetchColumn() < 2)
 try {
     $pdo->beginTransaction();
 
-    $tbl = $dossier['unit_type'] === 'accessoire' ? 'unit_accessoires' : 'units';
-    $pdo->prepare("UPDATE $tbl SET status_code='L' WHERE id=?")->execute([$dossier['unit_id']]);
+    if ($dossier['unit_type'] === 'accessoire') {
+        $pdo->prepare("UPDATE unit_accessoires SET status_code='L' WHERE id=?")->execute([$dossier['unit_id']]);
+    } else {
+        local_set_status($pdo, (int)$dossier['unit_id'], 'L');   // toutes les parties du local
+    }
     $pdo->prepare("UPDATE location_dossiers SET statut='loue', date_confirmation=NOW() WHERE id=?")->execute([$dossier_id]);
     $pdo->prepare("INSERT INTO location_status_history (dossier_id,old_status,new_status,changed_by) VALUES (?,?,?,?)")
         ->execute([$dossier_id,'R','L',$_SESSION['user_id']]);
+
+    local_parkings_follow($pdo, $dossier_id, 'loue', (int)$_SESSION['user_id']);   // parkings rattachés (au local ou au 1er parking)
 
     $pdo->commit();
     echo json_encode(['ok'=>true]);

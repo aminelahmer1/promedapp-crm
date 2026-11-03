@@ -1,10 +1,13 @@
 <?php
 require __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/locaux_lib.php';
+require_once __DIR__ . '/includes/nav_lib.php';
 if (empty($_SESSION['user_id'])) { header('Location: login.php'); exit; }
 $username = htmlspecialchars($_SESSION['full_name'] ?? $_SESSION['username'] ?? '', ENT_QUOTES, 'UTF-8');
 
 /* ══ Paramètres ══════════════════════════════════════════════ */
 $mode    = ($_GET['mode'] ?? 'sale') === 'location' ? 'location' : 'sale';
+nav_set_mode($mode === 'location' ? 'location' : 'vente');
 $selProj = trim($_GET['project'] ?? '');
 $cat     = in_array($_GET['cat'] ?? '', ['units','parking','celliers']) ? $_GET['cat'] : 'units';
 
@@ -42,6 +45,86 @@ if (strtoupper($selProj) === 'EVOLO') {
     usort($units, fn($x, $y) => $x['_sort'] <=> $y['_sort'] ?: strcmp($x['ref_code'], $y['ref_code']));
 }
 
+/* ══ Locaux en plusieurs parties + lien vente ↔ location ════════
+   Le même bien peut exister dans la liste vente et dans la liste location
+   (même référence) : s'il est loué, la vente affiche « Loué » ; s'il est vendu,
+   la location affiche « Vendu ». Les parties d'un même local (includes/locaux_lib.php)
+   sont affichées ensemble, avec un seul état. */
+$otherMode = $mode === 'sale' ? 'location' : 'sale';
+$stO = $pdo->prepare("SELECT u.ref_code, u.status_code FROM units u JOIN projects p ON p.id = u.project_id
+                      WHERE p.code = :code AND u.operation_mode = :mode");
+$stO->execute([':code' => $selProj, ':mode' => $otherMode]);
+$otherStatus = [];
+foreach ($stO->fetchAll() as $o) $otherStatus[trim((string)$o['ref_code'])] = $o['status_code'];
+$blockingOther = $mode === 'sale' ? 'L' : 'V';   // l'état de l'autre liste qui bloque celle-ci
+
+$unitItems = []; $groupPos = [];
+foreach ($units as $u) {
+    $g = local_group_of($selProj, (string)$u['ref_code']);
+    if (!$g) { $unitItems[] = ['type' => 'single', 'unit' => $u, 'parts' => [$u]]; continue; }
+    $k = $g['idx'];
+    if (!isset($groupPos[$k])) {
+        $groupPos[$k] = count($unitItems);
+        $unitItems[]  = ['type' => 'group', 'nom' => $g['nom'], 'order' => $g['parts'], 'parts' => []];
+    }
+    $unitItems[$groupPos[$k]]['parts'][] = $u;
+}
+foreach ($unitItems as &$it) {
+    if ($it['type'] === 'group') {
+        $order = array_flip($it['order']);
+        usort($it['parts'], fn($a, $b) => ($order[trim($a['ref_code'])] ?? 99) <=> ($order[trim($b['ref_code'])] ?? 99));
+        $lead = null;
+        foreach ($it['parts'] as $p) if ($p['total_surface'] !== null) { $lead = $p; break; }
+        $it['unit']  = $lead ?? $it['parts'][0];
+        $it['mixed'] = count(array_unique(array_column($it['parts'], 'status_code'))) > 1;
+    }
+    $it['locked'] = null;
+    foreach ($it['parts'] as $p) {
+        if (($otherStatus[trim((string)$p['ref_code'])] ?? null) === $blockingOther) { $it['locked'] = $blockingOther; break; }
+    }
+    $it['status'] = $it['locked'] ?? $it['unit']['status_code'];
+}
+unset($it);
+
+/* ══ Location : hausse de 5 % par an, seulement pendant que le bien est loué ═════
+   Point de départ = date de confirmation du dossier « loué ». Calcul à l'affichage,
+   la base n'est pas modifiée ; un bien libre garde le loyer de la liste. */
+const LOC_HAUSSE = 0.05;
+$loueDepuis = ['unit' => [], 'accessoire' => []];
+if ($mode === 'location') {
+    $q = $pdo->prepare("SELECT d.unit_id, d.unit_type, d.date_confirmation FROM location_dossiers d
+                        JOIN projects p ON p.id = d.project_id
+                        WHERE p.code = ? AND d.statut = 'loue' AND d.date_confirmation IS NOT NULL");
+    $q->execute([$selProj]);
+    foreach ($q->fetchAll() as $r) {
+        $t = $r['unit_type'] === 'accessoire' ? 'accessoire' : 'unit';
+        $loueDepuis[$t][(int)$r['unit_id']] = substr((string)$r['date_confirmation'], 0, 10);
+    }
+}
+/** Loyer mensuel en cours : +5 % à chaque anniversaire de la location (arrondi au millime chaque année) */
+function loyerEnCours($base, ?string $depuis): array {
+    if ($base === null || $base === '' || !$depuis) return ['mois' => $base, 'annees' => 0, 'depuis' => $depuis, 'prochaine' => null];
+    $d0 = new DateTime($depuis); $now = new DateTime('today');
+    $n = $d0 > $now ? 0 : (int)$d0->diff($now)->y;
+    $m = (float)$base;
+    for ($i = 0; $i < $n; $i++) $m = round($m * (1 + LOC_HAUSSE), 3);
+    $next = (clone $d0)->modify('+' . ($n + 1) . ' year');
+    return ['mois' => $m, 'annees' => $n, 'depuis' => $depuis, 'prochaine' => $next->format('d/m/Y')];
+}
+function loyerNote(array $l, string $status): string {
+    if ($status !== 'L') return '';
+    if (!$l['depuis']) return '<div class="rent-note muted">loué – date inconnue, pas de hausse calculée</div>';
+    $txt = 'loué depuis le ' . date('d/m/Y', strtotime($l['depuis']))
+         . ($l['annees'] ? ' · +5 % × ' . $l['annees'] : '') . ' · prochaine hausse le ' . $l['prochaine'];
+    return '<div class="rent-note">' . htmlspecialchars($txt) . '</div>';
+}
+foreach ($unitItems as &$it) {
+    $dep = null;
+    foreach ($it['parts'] as $p) if (isset($loueDepuis['unit'][(int)$p['id']])) { $dep = $loueDepuis['unit'][(int)$p['id']]; break; }
+    $it['loyer'] = loyerEnCours($it['unit']['price_month_ht_rent'] ?? null, $it['status'] === 'L' ? $dep : null);
+}
+unset($it);
+
 /* ══ Accessoires ════════════════════════════════════════════ */
 $parking = $celliers = [];
 $stmtA = $pdo->prepare("
@@ -52,7 +135,7 @@ $stmtA = $pdo->prepare("
     FROM unit_accessoires a
     JOIN projects p ON p.id = a.project_id
     WHERE p.code = :code AND a.operation_mode = :mode
-    ORDER BY a.accessory_type, a.code
+    ORDER BY a.accessory_type, LENGTH(a.code), a.code
 ");
 $stmtA->execute([':code' => $selProj, ':mode' => $mode]);
 foreach ($stmtA->fetchAll() as $a) {
@@ -64,7 +147,7 @@ foreach ($stmtA->fetchAll() as $a) {
 if ($cat === 'parking'  && empty($parking))  $cat = 'units';
 if ($cat === 'celliers' && empty($celliers)) $cat = 'units';
 $rows  = $cat === 'parking' ? $parking : ($cat === 'celliers' ? $celliers : $units);
-$total = count($rows);
+$total = $cat === 'units' ? count($unitItems) : count($rows);
 
 /* ══ Helpers ═════════════════════════════════════════════════ */
 function fmt($v, $d = 3) {
@@ -83,7 +166,15 @@ function badge($s, $id, $tbl) {
          . htmlspecialchars($lbl).'</span>';
 }
 
-$d = countSt($rows,'D'); $r = countSt($rows,'R'); $v = countSt($rows,'V');
+/* Bien bloqué par l'autre liste (loué côté vente, vendu côté location) : pas de clic */
+function badgeLocked($s) {
+    $lbl = $s === 'L' ? 'Loué' : 'Vendu';
+    $tip = $s === 'L' ? 'Loué (voir la liste Location)' : 'Vendu (voir la liste Vente)';
+    return '<span class="badge '.($s === 'L' ? 'l' : 'v').' locked" title="'.$tip.'">'.$lbl.' 🔒</span>';
+}
+
+$stRows = $cat === 'units' ? array_map(fn($it) => ['status_code' => $it['status']], $unitItems) : $rows;
+$d = countSt($stRows,'D'); $r = countSt($stRows,'R'); $v = countSt($stRows,'V');
 ?>
 <!DOCTYPE html>
 <html lang="fr">
@@ -157,6 +248,16 @@ $d = countSt($rows,'D'); $r = countSt($rows,'R'); $v = countSt($rows,'V');
     .badge.r { background:#fef9c3; color:#ca8a04; }
     .badge.l { background:#dbeafe; color:#1d4ed8; }
     .muted { color:#d1d5db; }
+    .badge.locked { cursor:default; }
+    .badge.locked:hover { opacity:1; }
+
+    /* Local en plusieurs parties : une couleur par local */
+    tr.local-head td { font-weight:600; }
+    tr.local-head td:first-child, tr.local-part td:first-child { border-left:4px solid var(--lc); }
+    tr.local-head td, tr.local-part td { background:var(--lb); }
+    tr.local-part td { font-size:12px; color:#6b7280; padding-top:5px; padding-bottom:5px; }
+    tr.local-part td:first-child { padding-left:26px; }
+    .local-tag { display:inline-block; font-size:10px; font-weight:700; color:var(--lc); border:1px solid var(--lc); border-radius:999px; padding:0 7px; margin-left:6px; }
 
     .px-empty { padding:60px 20px; text-align:center; color:#9ca3af; }
     .px-empty h3 { font-size:16px; color:#374151; margin:0 0 6px; }
@@ -281,6 +382,7 @@ $d = countSt($rows,'D'); $r = countSt($rows,'R'); $v = countSt($rows,'V');
     .btn-secondary { background:#fff; color:#374151; border:1px solid #e5e7eb; }
     .btn-secondary:hover { border-color:#111; }
     .form-error { font-size:12px; color:#dc2626; margin-top:6px; display:none; }
+  .rent-note{font-size:10px;color:#1d4ed8;font-weight:600;margin-top:2px;white-space:normal;line-height:1.3}.rent-note.muted{color:#888;font-weight:400}
   </style>
 </head>
 <body>
@@ -291,7 +393,7 @@ $d = countSt($rows,'D'); $r = countSt($rows,'R'); $v = countSt($rows,'V');
     <span class="subtitle">Prix – <?= $mode==='sale'?'Vente':'Location' ?></span>
   </div>
   <div class="user-bar">
-    <a class="header-link" href="select_project.php">← Projets</a>
+    <a class="header-link" href="<?= htmlspecialchars(nav_projects_url(), ENT_QUOTES, 'UTF-8') ?>">← Projets</a>
     <?php if (strtoupper($selProj) === 'EVOLO' && $mode === 'sale' && strtolower(trim((string)($_SESSION['role'] ?? ''))) !== 'agence'): ?>
     <!-- Changer de projet : AVA / FLAVA -->
     <details class="evo-switch" style="position:relative;display:inline-block">
@@ -311,7 +413,11 @@ $d = countSt($rows,'D'); $r = countSt($rows,'R'); $v = countSt($rows,'V');
 <div class="status-popup" id="statusPopup">
   <button data-val="D">🟢 Disponible</button>
   <button data-val="R">🟡 Réservé</button>
+  <?php if ($mode === 'location'): ?>
+  <button data-val="L">🔵 Loué</button>
+  <?php else: ?>
   <button data-val="V">🔴 Vendu</button>
+  <?php endif; ?>
 </div>
 
 <?php if ($mode === 'location'): ?>
@@ -433,7 +539,7 @@ $d = countSt($rows,'D'); $r = countSt($rows,'R'); $v = countSt($rows,'V');
 <div class="px-wrap">
 
   <!-- Retour -->
-  <a href="select_project.php" class="back-btn">← Retour aux projets</a>
+  <a href="<?= htmlspecialchars(nav_projects_url(), ENT_QUOTES, 'UTF-8') ?>" class="back-btn">← Retour aux projets</a>
 
   <!-- Hero -->
   <div class="px-hero">
@@ -497,18 +603,32 @@ $d = countSt($rows,'D'); $r = countSt($rows,'R'); $v = countSt($rows,'V');
         <?php if ($mode==='sale'): ?>
           <th>Prix m² HT</th><th>Prix HT</th><th>Prix TTC</th>
         <?php else: ?>
-          <th>Prix m²/an HT</th><th>Loyer HT / an</th><th>Loyer HT / mois</th>
+          <th>Prix m² / an</th><th>Loyer TTC / an</th><th>Loyer TTC / mois</th>
         <?php endif; ?>
         <th>État</th>
       </tr></thead>
       <tbody>
-      <?php foreach ($rows as $u): ?>
-      <tr data-search="<?= htmlspecialchars(strtolower(implode(' ',[$u['ref_code'],$u['type'],$u['floor_name'],$u['block_name'],$u['designation']]))) ?>">
-        <td><strong><?= esc($u['ref_code']) ?></strong></td>
+      <?php
+      $palette = [['#2563eb','#eff6ff'],['#9333ea','#faf5ff'],['#ea580c','#fff7ed'],['#0d9488','#f0fdfa'],['#db2777','#fdf2f8']];
+      $gi = 0;
+      foreach ($unitItems as $ix => $it):
+        $u = $it['unit'];
+        $isGroup = $it['type'] === 'group';
+        $style = '';
+        if ($isGroup) { [$lc,$lb] = $palette[$gi++ % count($palette)]; $style = ' style="--lc:'.$lc.';--lb:'.$lb.'"'; }
+        $refs  = array_map(fn($p) => (string)$p['ref_code'], $it['parts']);
+        $floors = implode(' + ', array_unique(array_filter(array_map(fn($p) => (string)$p['floor_name'], $it['parts']))));
+        $surfSum = array_sum(array_map(fn($p) => (float)$p['surface'], $it['parts']));
+        $search = strtolower(implode(' ', array_merge($refs, [$it['nom'] ?? '', $u['type'], $floors, $u['block_name'], $u['designation']])));
+      ?>
+      <tr class="<?= $isGroup ? 'local-head' : '' ?>" data-row="<?= $ix ?>"<?= $style ?> data-search="<?= htmlspecialchars($search) ?>">
+        <td>
+          <strong><?= $isGroup ? esc($it['nom']) : esc($u['ref_code']) ?></strong>
+        </td>
         <td><?= esc($u['block_name']) ?></td>
-        <td><?= esc($u['floor_name']) ?></td>
+        <td><?= $isGroup ? esc($floors) : esc($u['floor_name']) ?></td>
         <td><?= esc($u['type']) ?></td>
-        <td><?= fmt($u['surface']) ?></td>
+        <td><?= fmt($isGroup ? $surfSum : $u['surface']) ?></td>
         <?php if ($mode==='location'): ?><td><?= fmt($u['total_surface']) ?></td><?php endif; ?>
         <td><?= esc($u['designation']) ?></td>
         <?php if ($mode==='sale'): ?>
@@ -517,11 +637,26 @@ $d = countSt($rows,'D'); $r = countSt($rows,'R'); $v = countSt($rows,'V');
           <td><?= fmt($u['price_ttc_sale']) ?></td>
         <?php else: ?>
           <td><?= fmt($u['price_m2_ht_rent']) ?></td>
-          <td><?= fmt($u['price_year_ht_rent']) ?></td>
-          <td><?= fmt($u['price_month_ht_rent']) ?></td>
+          <?php $ly = $it['loyer']; $hausse = $ly['annees'] > 0; ?>
+          <td><?= fmt($hausse ? round($ly['mois'] * 12, 3) : $u['price_year_ht_rent']) ?></td>
+          <td><?= fmt($hausse ? $ly['mois'] : $u['price_month_ht_rent']) ?><?= loyerNote($ly, $it['status']) ?></td>
         <?php endif; ?>
-        <td><?= badge($u['status_code'], $u['id'], 'unit') ?></td>
+        <td>
+          <?= $it['locked'] ? badgeLocked($it['locked']) : badge($u['status_code'], $u['id'], 'unit') ?>
+        </td>
       </tr>
+      <?php if ($isGroup): foreach ($it['parts'] as $p): ?>
+      <tr class="local-part" data-parent="<?= $ix ?>"<?= $style ?>>
+        <td>↳ <?= esc($p['ref_code']) ?></td>
+        <td><?= esc($p['block_name']) ?></td>
+        <td><?= esc($p['floor_name']) ?></td>
+        <td><?= esc($p['type']) ?></td>
+        <td><?= fmt($p['surface']) ?></td>
+        <?php if ($mode==='location'): ?><td></td><?php endif; ?>
+        <td></td><td></td><td></td><td></td>
+        <td></td>
+      </tr>
+      <?php endforeach; endif; ?>
       <?php endforeach; ?>
       </tbody>
     </table>
@@ -533,7 +668,7 @@ $d = countSt($rows,'D'); $r = countSt($rows,'R'); $v = countSt($rows,'V');
         <?php if ($mode==='sale'): ?>
           <th>Prix TTC</th>
         <?php else: ?>
-          <th>Loyer HT / an</th><th>Loyer HT / mois</th>
+          <th>Loyer TTC / an</th><th>Loyer TTC / mois</th>
         <?php endif; ?>
         <th>État</th>
       </tr></thead>
@@ -547,8 +682,9 @@ $d = countSt($rows,'D'); $r = countSt($rows,'R'); $v = countSt($rows,'V');
         <?php if ($mode==='sale'): ?>
           <td><?= fmt($a['price_ttc_sale']) ?></td>
         <?php else: ?>
-          <td><?= fmt($a['price_year_ht_rent']) ?></td>
-          <td><?= fmt($a['price_month_ht_rent']) ?></td>
+          <?php $ly = loyerEnCours($a['price_month_ht_rent'], ($a['status_code'] === 'L') ? ($loueDepuis['accessoire'][(int)$a['id']] ?? null) : null); $hausse = $ly['annees'] > 0; ?>
+          <td><?= fmt($hausse ? round($ly['mois'] * 12, 3) : $a['price_year_ht_rent']) ?></td>
+          <td><?= fmt($hausse ? $ly['mois'] : $a['price_month_ht_rent']) ?><?= loyerNote($ly, (string)$a['status_code']) ?></td>
         <?php endif; ?>
         <td><?= badge($a['status_code'], $a['id'], 'accessoire') ?></td>
       </tr>
@@ -594,11 +730,17 @@ const CLS    = { D:'d', R:'r', V:'v', L:'l' };
 function filterTable(){
   const q = document.getElementById('searchInput').value.toLowerCase();
   const rows = Array.from(document.querySelectorAll('#mainTable tbody tr'));
+  const shown = {};
   let v = 0;
   rows.forEach(tr => {
-    const show = !q || tr.dataset.search.includes(q);
+    if (tr.dataset.parent !== undefined) return;            // partie d'un local : suit sa ligne de tête
+    const show = !q || (tr.dataset.search || '').includes(q);
     tr.style.display = show ? '' : 'none';
+    if (tr.dataset.row !== undefined) shown[tr.dataset.row] = show;
     if (show) v++;
+  });
+  rows.forEach(tr => {
+    if (tr.dataset.parent !== undefined) tr.style.display = shown[tr.dataset.parent] ? '' : 'none';
   });
   const c = document.getElementById('tableCount');
   if (c) c.textContent = v + ' bien' + (v > 1 ? 's' : '');
@@ -616,9 +758,11 @@ function filterTable(){
       e.stopPropagation();
       const st = badge.dataset.status;
 
-      /* En mode location, R/L → ouvrir dossier au lieu du popup */
+      /* En mode location, R/L → ouvrir la fiche client du dossier (documents, confirmer, annuler) */
       if (MODE === 'location' && (st === 'R' || st === 'L')) {
-        openDossier(badge);
+        window.location.href = 'location_fiche.php?unit_id=' + encodeURIComponent(badge.dataset.id)
+          + '&type=' + (badge.dataset.table === 'accessoire' ? 'accessoire' : 'unit')
+          + '&project=' + encodeURIComponent(PROJECT_CODE);
         return;
       }
 
@@ -641,12 +785,23 @@ function filterTable(){
       const ns = this.dataset.val;
       popup.classList.remove('open');
 
-      /* En mode location, clic sur Réservé → ouvrir fiche locataire */
-      if (MODE === 'location' && ns === 'R') {
-        pendingBadge = cur;
+      /* En mode location, Réservé ou Loué → fiche locataire (Loué : puis le dossier
+         pour joindre contrat + état des lieux et confirmer la location) */
+      if (MODE === 'location' && (ns === 'R' || ns === 'L')) {
+        if (cur.dataset.status === ns) return;
+        /* Réservé ou Loué sur un bien disponible → la fiche client s'ouvre directement (comme en vente) */
+        if (cur.dataset.status === 'D') {
+          window.location.href = 'location_fiche.php?unit_id=' + encodeURIComponent(cur.dataset.id)
+            + '&type=' + (cur.dataset.table === 'accessoire' ? 'accessoire' : 'unit')
+            + '&project=' + encodeURIComponent(PROJECT_CODE) + (ns === 'L' ? '&status=L' : '');
+          return;
+        }
+        pendingBadge  = cur;
+        pendingTarget = ns;
         openFiche();
         return;
       }
+      if (MODE === 'location' && ns === 'D' && cur.dataset.status === 'D') return;
 
       /* EVOLO : Réservé / Vendu → ouvrir la fiche ; le statut est enregistré par la fiche */
       if (String(PROJECT_CODE).toUpperCase() === 'EVOLO' && MODE === 'sale' && cur.dataset.table !== 'accessoire' && (ns === 'R' || ns === 'V')) {
@@ -700,6 +855,7 @@ function applyStatus(badge, ns) {
    FICHE LOCATAIRE
    ════════════════════════════════════════════════════════════ */
 let pendingBadge = null;
+let pendingTarget = 'R';
 
 function openFiche() {
   document.getElementById('ficheOverlay')?.classList.add('open');
@@ -713,6 +869,7 @@ function openFiche() {
 function closeFiche() {
   document.getElementById('ficheOverlay')?.classList.remove('open');
   pendingBadge = null;
+  pendingTarget = 'R';
 }
 
 function toggleLocType(t) {
@@ -785,7 +942,10 @@ function submitFiche() {
     pendingBadge.className      = 'badge r';
     pendingBadge.dataset.status = 'R';
     pendingBadge.dataset.dossierId = d.dossier_id;
+    const badge = pendingBadge, goLoue = pendingTarget === 'L';
     closeFiche();
+    if (goLoue) openDossier(badge);   // joindre contrat + état des lieux puis « Confirmer la location »
+    else window.location.href = 'location_fiche.php?dossier_id=' + encodeURIComponent(d.dossier_id);   // fiche récapitulative
   })
   .catch(() => {
     errEl.textContent   = 'Erreur réseau. Veuillez réessayer.';
@@ -833,7 +993,7 @@ function renderDossier(data) {
   const annule   = dossier.statut === 'annule';
   const d = dossier;
 
-  document.getElementById('dossierTitle').textContent = '📁 Dossier – ' + (unit?.ref_code || '');
+  document.getElementById('dossierTitle').textContent = '📁 Dossier – ' + (data.local?.nom || unit?.ref_code || '');
 
   /* ── Locataire ── */
   let locHtml = '';
@@ -925,13 +1085,19 @@ function renderDossier(data) {
 
   document.getElementById('dossierBody').innerHTML = `
     ${locked ? `<div class="dossier-locked">🔒 Location confirmée le ${d.date_confirmation ? d.date_confirmation.substring(0,10) : ''}</div>` : ''}
+    ${!annule ? `<div style="text-align:right;margin:-4px 0 12px"><a class="btn btn-secondary" style="text-decoration:none;display:inline-block" href="location_fiche.php?dossier_id=${d.id}">🖨 Fiche récapitulative</a></div>` : ''}
     <div class="dossier-section">
       <div class="dossier-section-title">Bien</div>
-      ${infoGrid([
+      ${data.local ? infoGrid([
+        ['Local', data.local.nom],
+        ['Parties', data.local.parts.map(p => p.ref_code + (p.floor_name ? ' (' + p.floor_name + ')' : '') + ' ' + p.surface + ' m²').join(' · ')],
+        ['Surface totale', data.local.total_surface + ' m²'],
+        ['Loyer TTC / mois', data.local.loyer_mois_ht ? formatMoney(data.local.loyer_mois_ht) + ' DT' : null],
+      ]) : infoGrid([
         ['Référence', unit?.ref_code],
         ['Étage', unit?.floor_name],
         ['Surface', unit?.surface ? unit.surface + ' m²' : null],
-        ['Loyer HT / mois', unit?.price_month_ht_rent ? formatMoney(unit.price_month_ht_rent) + ' DT' : null],
+        ['Loyer TTC / mois', unit?.price_month_ht_rent ? formatMoney(unit.price_month_ht_rent) + ' DT' : null],
       ])}
     </div>
     <div class="dossier-section">

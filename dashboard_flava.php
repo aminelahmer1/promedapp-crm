@@ -86,6 +86,7 @@ if ($currentCode !== 'FLAVA') {
       <span class="subtitle">Gestion des plans – Admin</span>
     </div>
     <div class="user-bar">
+      <a class="header-link" href="home_flava.php">← Accueil</a>
       <a class="header-link" href="liste_prix_flava.php">Liste des Prix</a>
       <a class="header-link" href="documents.php">Documents</a>
       <?php if (($_SESSION['role'] ?? '') === 'admin'): ?>

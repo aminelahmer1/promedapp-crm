@@ -1,5 +1,7 @@
 <?php
 require __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/nav_lib.php';
+nav_set_mode('vente');
 
 if (empty($_SESSION['user_id'])) {
     header('Location: login.php');

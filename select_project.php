@@ -1,10 +1,14 @@
 <?php
 require __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/nav_lib.php';
 
 if (empty($_SESSION['user_id'])) {
     header('Location: login.php');
     exit;
 }
+/* Onglet Vente / Location : ?mode=location, sinon le dernier mode utilisé */
+if (isset($_GET['mode'])) nav_set_mode((string)$_GET['mode']);
+$navMode = nav_mode();
 
 // ------------------------------
 // 1) Logos manuels (tu peux adapter)
@@ -555,7 +559,11 @@ function setMode(mode) {
   document.getElementById('modeHint').textContent = isVente
     ? 'Projets de vente'
     : 'Projets de location — liste des prix';
+  /* retenir l'onglet pour le prochain retour à cette page */
+  try { history.replaceState(null, '', isVente ? 'select_project.php?mode=vente' : 'select_project.php?mode=location'); } catch (e) {}
+  fetch('select_project.php?mode=' + (isVente ? 'vente' : 'location'), { method: 'HEAD', credentials: 'same-origin' }).catch(() => {});
 }
+<?php if ($navMode === 'location' && !empty($hasLocationAccess)): ?>setMode('location');<?php endif; ?>
 </script>
 </body>
 </html>

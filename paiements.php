@@ -1,5 +1,6 @@
 <?php
 require __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/nav_lib.php';
 if (empty($_SESSION['user_id'])) { header('Location: login.php'); exit; }
 
 function tableExists(PDO $pdo, string $t): bool {
@@ -182,6 +183,7 @@ h1{margin:0 0 6px;font-size:22px}
       <div style="color:#5e6878;font-size:13px"><?= count($promises) ?> promesse<?= count($promises)>1?'s':'' ?> — Aujourd'hui : <?= date('d/m/Y') ?></div>
     </div>
     <div style="display:flex;gap:8px">
+      <a href="<?= htmlspecialchars(nav_home_url(), ENT_QUOTES, 'UTF-8') ?>" style="text-decoration:none"><button class="btn-sm" style="background:#ececec;color:#111">⌂ Accueil</button></a>
       <a href="crm_clients.php" style="text-decoration:none"><button class="btn-sm" style="background:#ececec;color:#111">← CRM</button></a>
       <a href="fiche_client.php" style="text-decoration:none"><button class="btn-sm btn-brand">+ Nouvelle fiche</button></a>
     </div>

@@ -1,5 +1,6 @@
 <?php
 require __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/nav_lib.php';
 $username = htmlspecialchars($_SESSION['full_name'] ?? $_SESSION['username'] ?? '', ENT_QUOTES, 'UTF-8');
 $isAdmin  = (($_SESSION['role'] ?? '') === 'admin');
 
@@ -314,7 +315,8 @@ table.hist-tbl .hist-row-apt th { border-top: 2px solid #e5e7eb; }
 </style>
 </head>
 <body>
-<button class="back-fab" onclick="history.back()" title="Page précédente">&#8592;</button>
+<?= nav_back_script() ?>
+<button class="back-fab" onclick="navBack('home_ava.php')" title="Retour">&#8592;</button>
 
 <header class="app-header">
   <div class="brand">
@@ -322,6 +324,8 @@ table.hist-tbl .hist-row-apt th { border-top: 2px solid #e5e7eb; }
     <span class="subtitle">Liste des Prix</span>
   </div>
   <div class="user-bar">
+    <a class="header-link" href="home_ava.php">← Accueil</a>
+    <a class="header-link" href="dashboard_ava.php">Plan</a>
     <a class="header-link" href="liste_prix_flava.php">FLAVA →</a>
     <span class="user-name"><?= $username ?></span>
     <a class="logout-link" href="logout.php">Se déconnecter</a>

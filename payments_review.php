@@ -1,5 +1,6 @@
 <?php
 require __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/nav_lib.php';
 if (empty($_SESSION['user_id'])) { header('Location: login.php'); exit; }
 
 // ── Action : marquer un paiement pending_review ──────────────────────────
@@ -97,6 +98,7 @@ td{padding:7px 12px;border-bottom:1px solid #f0f0f0;vertical-align:middle}
   <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
     <h1 style="margin:0;font-size:22px">🔍 Paiements orphelins</h1>
     <a href="paiements.php"><button class="btn-sm" style="background:#e2eef5;color:#145f7d">← Suivi paiements</button></a>
+    <a href="<?= htmlspecialchars(nav_home_url(), ENT_QUOTES, 'UTF-8') ?>" style="text-decoration:none"><button class="btn-sm" style="background:#ececec;color:#111">⌂ Accueil</button></a>
   </div>
 
   <?php if ($marked): ?>

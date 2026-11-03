@@ -2,6 +2,7 @@
 require __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/price_lib.php';
 require_once __DIR__ . '/includes/reservation_lib.php';
+require_once __DIR__ . '/includes/nav_lib.php';
 
 if (empty($_SESSION['user_id'])) {
     header('Location: login.php');
@@ -681,7 +682,11 @@ function safe_js_json($data, int $flags): string {
         <button class="btn btn-save" type="button" id="saveBtn">Enregistrer</button>
         <button class="btn btn-brand" type="button" id="printBtn">Imprimer la fiche</button>
         <button class="btn" type="button" id="optionVenteBtn" style="background:#f0f7ff;color:#145f7d;border:1px solid #b8d4f0" onclick="openOptionVente()">📄 Option de vente</button>
-        <a class="btn btn-secondary" href="javascript:history.back()">Retour</a>
+        <?php $navProj = $requestedProject ?: strtoupper((string)($_SESSION['current_project_code'] ?? ''));
+              $navFallback = $navProj === 'EVOLO' ? 'prix.php?mode=sale&project=EVOLO' : ($navProj === 'AVA' ? 'dashboard_ava.php' : ($navProj === 'FLAVA' ? 'dashboard_flava.php' : nav_projects_url('vente'))); ?>
+        <?= nav_back_script() ?>
+        <a class="btn btn-secondary" href="#" onclick="return navBack(<?= htmlspecialchars(json_encode($navFallback), ENT_QUOTES, 'UTF-8') ?>)">← Retour</a>
+        <a class="btn btn-secondary" href="<?= htmlspecialchars(nav_home_url($navProj ?: null), ENT_QUOTES, 'UTF-8') ?>">⌂ Accueil</a>
       </div>
 
       <!-- ── Suivi promesse ─────────────────────────────── -->

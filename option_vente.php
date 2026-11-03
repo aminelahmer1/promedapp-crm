@@ -1,5 +1,6 @@
 <?php
 require __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/nav_lib.php';
 if (empty($_SESSION['user_id'])) { header('Location: login.php'); exit; }
 
 $COMPANY = require __DIR__ . '/company_config.php';
@@ -339,11 +340,13 @@ $todayFr = date('j') . ' ' . $months[(int)date('n')] . ' ' . date('Y');
     <div class="form-section">
       <h2>Navigation</h2>
       <?php if($mode === 'direct'): ?>
-      <a class="nav-link" href="javascript:history.back()">← Retour à la fiche client</a>
+      <a class="nav-link" href="#" onclick="return navBack(<?= htmlspecialchars(json_encode('fiche_client.php?unit_code=' . rawurlencode((string)($promise['unit_code'] ?? ''))), ENT_QUOTES, 'UTF-8') ?>)">← Retour à la fiche client</a>
       <?php else: ?>
       <a class="nav-link" href="promise_view.php?id=<?=$promise_id?>">← Retour à la promesse</a>
       <?php endif; ?>
       <a class="nav-link" href="promises.php">Promesses de vente</a>
+      <a class="nav-link" href="<?= htmlspecialchars(nav_home_url(), ENT_QUOTES, 'UTF-8') ?>">⌂ Accueil du projet</a>
+      <?= nav_back_script() ?>
     </div>
 
     <div class="form-section">

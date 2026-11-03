@@ -1,5 +1,6 @@
 <?php
 require __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/nav_lib.php';
 if (empty($_SESSION['user_id'])) { header('Location: login.php'); exit; }
 
 $search  = trim((string)($_GET['q']       ?? ''));
@@ -111,6 +112,7 @@ $DSC=['pending'=>'b-pend','in_progress'=>'b-prog','paid'=>'b-paid','overdue'=>'b
 
     <div class="form-section">
       <h2>Navigation</h2>
+      <a class="nav-link" href="<?= htmlspecialchars(nav_home_url(), ENT_QUOTES, 'UTF-8') ?>">⌂ Accueil du projet</a>
       <a class="nav-link" href="clients.php">← Dossiers clients</a>
       <a class="nav-link" href="promise_view.php?new=1">+ Nouvelle promesse</a>
     </div>

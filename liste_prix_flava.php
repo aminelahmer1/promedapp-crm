@@ -1,5 +1,6 @@
 <?php
 require __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/nav_lib.php';
 require_once __DIR__ . '/includes/price_lib.php';
 $username = htmlspecialchars($_SESSION['full_name'] ?? $_SESSION['username'] ?? '', ENT_QUOTES, 'UTF-8');
 $isAdmin  = (($_SESSION['role'] ?? '') === 'admin');
@@ -375,7 +376,8 @@ table.hist-tbl .hist-sep td { border-top: 2px solid #e5e7eb; }
 </style>
 </head>
 <body>
-<button class="back-fab" onclick="history.back()" title="Page précédente">&#8592;</button>
+<?= nav_back_script() ?>
+<button class="back-fab" onclick="navBack('home_flava.php')" title="Retour">&#8592;</button>
 
 <header class="app-header">
   <div class="brand">
@@ -383,6 +385,8 @@ table.hist-tbl .hist-sep td { border-top: 2px solid #e5e7eb; }
     <span class="subtitle">Liste des Prix</span>
   </div>
   <div class="user-bar">
+    <a class="header-link" href="home_flava.php">← Accueil</a>
+    <a class="header-link" href="dashboard_flava.php">Plan</a>
     <a class="header-link" href="liste_prix_ava.php">AVA →</a>
     <span class="user-name"><?= $username ?></span>
     <a class="logout-link" href="logout.php">Se déconnecter</a>
@@ -702,14 +706,23 @@ function updateNavBtns() {
 
 /* ══ Tarif bar ═══════════════════════════════════════════════ */
 function renderTarifBar() {
+  /* Bande : prix total TTC le plus haut du type, même calcul que la colonne Prix total TTC */
+  const range = (vals) => vals.length ? fmtMoney(Math.max(...vals)) + ' TTC' : '—';
+  const aptTotals = (keep) => UNITS
+    .filter(u => (u.designation || '').toUpperCase() !== 'COMMERCE' && keep(u))
+    .map(u => r0(r3(unitM2Ht(u, selY, selMo) * (1 + VAT)) * parseFloat(u.surface || 0)));
+  const desig = (u) => (u.designation || '').trim().toUpperCase();
+  const type  = (u) => (u.type || '').trim().toUpperCase();
+  const isApt = (u) => !['DUPLEX', 'PENTHOUSE', 'LOFT'].includes(desig(u));
+  const cm2Ttc = r3(cellierM2(selY, selMo) * (1 + VAT));
   const items = [
-    ['S+1',      fmtM2(unitM2Ht({ designation:'APARTMENT', type:'S+1' }, selY, selMo))],
-    ['S+2',      fmtM2(unitM2Ht({ designation:'APARTMENT', type:'S+2' }, selY, selMo))],
-    ['S+3/S+3,5',fmtM2(unitM2Ht({ designation:'APARTMENT', type:'S+3' }, selY, selMo))],
-    ['Duplex',   fmtM2(unitM2Ht({ designation:'DUPLEX',    type:''    }, selY, selMo))],
-    ['Penthouse',fmtM2(unitM2Ht({ designation:'PENTHOUSE', type:''    }, selY, selMo))],
-    ['Parking',  fmtMoney(parkingHT(selY, selMo))],
-    ['Cellier',  fmtM2(cellierM2(selY, selMo))],
+    ['S+1',       range(aptTotals(u => isApt(u) && type(u) === 'S+1'))],
+    ['S+2',       range(aptTotals(u => isApt(u) && type(u) === 'S+2'))],
+    ['S+3/S+3,5', range(aptTotals(u => isApt(u) && type(u) !== 'S+1' && type(u) !== 'S+2'))],
+    ['Duplex',    range(aptTotals(u => desig(u) === 'DUPLEX'))],
+    ['Penthouse', range(aptTotals(u => desig(u) === 'PENTHOUSE' || desig(u) === 'LOFT'))],
+    ['Parking',   fmtMoney(parkingHT(selY, selMo) * (1 + VAT)) + ' TTC'],
+    ['Cellier',   range(CELLIERS.map(c => r0(cm2Ttc * parseFloat(c.surface || 0))))],
   ];
   document.getElementById('tarifBar').innerHTML = items.map((item, i) =>
     (i > 0 ? '<span class="tarif-sep">|</span>' : '') +
